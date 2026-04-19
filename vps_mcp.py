@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel
 from mcp.server.transport_security import TransportSecuritySettings
 
 load_dotenv()
@@ -69,32 +70,23 @@ def _read_log_entries() -> list[dict]:
 
 
 def _write_logs(summary: dict, stdout: str, stderr: str, raw_path: Path) -> None:
-    timestamp = summary["timestamp"]
-    command = summary["command"]
-    status = summary["status"]
-    exit_code = summary["exit_code"]
-    exec_time = summary["exec_time"]
-    rate_1m = summary["rate_1m"]
-    verified = summary["verified"]
     with MCP_LOG.open("a", encoding="utf-8") as f:
         f.write(json.dumps(summary, ensure_ascii=False) + "\n")
     raw_path.write_text(
-        "\n".join(
-            [
-                "timestamp: " + timestamp,
-                "command: " + command,
-                "status: " + str(status),
-                "exit_code: " + str(exit_code),
-                "exec_time: " + str(exec_time),
-                "rate_1m: " + str(rate_1m),
-                "verified: " + str(verified),
-                "stdout:",
-                stdout,
-                "stderr:",
-                stderr,
-                "",
-            ]
-        ),
+        "\n".join([
+            "timestamp: " + summary["timestamp"],
+            "command: " + summary["command"],
+            "status: " + str(summary["status"]),
+            "exit_code: " + str(summary["exit_code"]),
+            "exec_time: " + str(summary["exec_time"]),
+            "rate_1m: " + str(summary["rate_1m"]),
+            "verified: " + str(summary["verified"]),
+            "stdout:",
+            stdout,
+            "stderr:",
+            stderr,
+            "",
+        ]),
         encoding="utf-8",
     )
 
@@ -184,7 +176,9 @@ class BearerAuthMiddleware:
         if scope.get("type") == "http":
             path = scope.get("path", "")
             public_paths = {"/", "/health", "/status"}
-            if BEARER_TOKEN and path not in public_paths:
+            if path.startswith("/sites/") or path == "/sites":
+                pass
+            elif BEARER_TOKEN and path not in public_paths:
                 headers = {
                     key.decode("latin-1").lower(): value.decode("latin-1")
                     for key, value in scope.get("headers", [])
@@ -196,14 +190,17 @@ class BearerAuthMiddleware:
         await self.app(scope, receive, send)
 
 
+class ExecRequest(BaseModel):
+    cmd: str
+    source: str = "user"
+
+
 @app.post("/exec")
-async def http_exec(request: Request) -> JSONResponse:
-    body = await request.json()
-    cmd = str(body.get("cmd") or "").strip()
+def http_exec(req: ExecRequest) -> JSONResponse:
+    cmd = req.cmd.strip()
     if not cmd:
         return JSONResponse({"detail": "cmd is required"}, status_code=400)
-    source = str(body.get("source") or "user").strip() or "user"
-    result = _run_exec(cmd, source=source)
+    result = _run_exec(cmd, source=req.source.strip() or "user")
     return JSONResponse(result)
 
 
